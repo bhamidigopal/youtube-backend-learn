@@ -8,7 +8,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
 # Get the API key from environment variable
-api_key = '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'
+api_key = 'AAA'
 if not api_key:
     raise ValueError("No OpenAI API key found. Please set the OPENAI_API_KEY environment variable.")
 
