@@ -111,6 +111,30 @@ password: KKK
   ```
 - **Response**: MP3 audio file
 
+
+### 4. Transcribe YouTube Video
+
+- **Endpoint**: `/transcribe-youtube`
+- **Method**: POST
+- **Headers**:
+  ```
+  username: admin
+  password: AlekhyaAnu
+  Content-Type: application/json
+  ```
+- **Request Body**:
+  ```json
+  {
+    "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+  }
+  ```
+- **Response**:
+  ```json
+  {
+    "transcription": "Full transcribed text of the YouTube video..."
+  }
+  ```
+
 ## Sample Tests
 
 Here are some curl commands to test each endpoint:
@@ -151,6 +175,15 @@ Here are some curl commands to test each endpoint:
      --output audio.mp3
    ```
 
+   4. Transcribe YouTube Video:
+   ```bash
+   curl -X POST http://localhost:5000/transcribe-youtube \
+     -H "username: admin" \
+     -H "password: XXX" \
+     -H "Content-Type: application/json" \
+     -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
+
 ## License
 
 This project is licensed under the MIT License.
+

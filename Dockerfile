@@ -21,3 +21,6 @@ EXPOSE 5000
 
 # Use an entrypoint script to pass the API key
 ENTRYPOINT ["python", "app.py"]
+
+# Copy the .env file
+COPY .env .env
