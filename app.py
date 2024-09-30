@@ -19,11 +19,13 @@ import anthropic
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-
-
 from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api._errors import NoTranscriptFound
 from youtube_transcript_api.formatters import JSONFormatter
 import json
+from langdetect import detect, LangDetectException
+
+from deep_translator import GoogleTranslator
 
 app = Flask(__name__)
 CORS(app)
@@ -44,6 +46,8 @@ if not claude_api_key:
 
 openai_client = OpenAI(api_key=openai_api_key)
 claude_client = anthropic.Anthropic(api_key=claude_api_key)
+
+
 
 # Authentication decorator
 def require_auth(f):
@@ -129,20 +133,18 @@ def download_youtube_audio(url, output_dir="temp_audio"):
         logging.error(f"Error downloading audio for video ID {video_id}: {str(e)}")
         raise
 
+
+
 def detect_language(text):
-    try:
-        response = openai_client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are a language detection expert. Respond with only the ISO 639-1 two-letter language code."},
-                {"role": "user", "content": f"Detect the language of this text:\n\n{text[:100]}"}
-            ],
-            max_tokens=2
-        )
-        return response.choices[0].message.content.strip().lower()
-    except Exception as e:
+   try:
+        detected_lang = detect(text)
+        return detected_lang
+   except LangDetectException as e:
+        detected_lang = 'unknown'
         logging.error(f"Error detecting language: {str(e)}")
         raise
+
+
 
 def translate_to_english(text):
     try:
@@ -156,8 +158,12 @@ def translate_to_english(text):
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
+        logging.error(f"Error downloading audio: {str(e)}")
         logging.error(f"Error translating text: {str(e)}")
         raise
+
+
+
 
 def transcribe_audio(file_path):
     try:
@@ -260,48 +266,34 @@ def summarize_youtube():
 
 
 
-def process_transcript(url):
+def process_transcript(url, language='en'):
     try:
         video_id = extract_youtube_video_id(url)
         logging.info(f"Processing transcript for video ID: {video_id}")
-        transcript = YouTubeTranscriptApi.get_transcript(video_id)
-
-
-
-
-        '''
-        # Detect the language of the transcription
-        detected_language = detect_language(transcription)
         
-        if detected_language != 'en':
-            logging.info(f"Detected non-English language: {detected_language}. Translating to English.")
-            translated_transcription = translate_to_english(transcription)
-            return {
-                "original_transcription": transcription,
-                "detected_language": detected_language,
-                "english_translation": translated_transcription
-            }
-        else:
-            return {
-                "transcription": transcription,
-                "detected_language": "en"
-            }
-   
+        # Get list of available transcripts
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
         
-        '''
-        
-        # Format the transcript to JSON
-        formatter = JSONFormatter()
-        json_formatted = formatter.format_transcript(transcript)
-        
-        # Parse the JSON string
-        transcript_data = json.loads(json_formatted)
+        try:
+            # Try to get the transcript in the specified language
+            transcript = transcript_list.find_transcript([language])
+            logging.info(f"Transcript found for language '{language}'")
+        except NoTranscriptFound:
+            # If the specified language is not available, fall back to the default language
+            logging.warning(f"No transcript found for language '{language}'. Using default transcript.")
+            transcript = transcript_list.find_transcript([transcript_list.transcript_data[0]['language_code']])
+            logging.info(f"Transcript found for language '{transcript_list.transcript_data[0]['language_code']}'")
+
+        # Fetch the actual transcript data
+        transcript_data = transcript.fetch()
         
         # Extract all 'text' fields and concatenate them
         full_text = ' '.join(item['text'] for item in transcript_data)
         
-        # Return a dictionary instead of a jsonify response
-        return {'transcription': full_text}
+        return {
+            'transcription': full_text,
+            'detected_language': transcript.language_code
+        }
     
     except Exception as e:
         logging.error(f"Error in process_transcript: {str(e)}")
@@ -520,26 +512,41 @@ def test_time():
 
 def transcribe_youtube(youtube_url):
     try:
-        # Check for available captions using YouTube Data API
-        transcript_result = process_transcript(youtube_url)
+        video_id = extract_youtube_video_id(youtube_url)
+        logging.info(f"Processing transcript for video ID: {video_id}")
         
-        if 'error' in transcript_result:
-            raise Exception(transcript_result['error'])
+        # Get list of available transcripts
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
         
-        return {
-            "transcription": transcript_result['transcription'],
-            "detected_language": "en"  # Assuming the transcript is in English
-        }
-
+        # Get the first available transcript (usually the original language)
+        transcript = next(iter(transcript_list))
+        
+        # Fetch the actual transcript data
+        transcript_data = transcript.fetch()
+        
+        # Extract all 'text' fields and concatenate them
+        full_text = ' '.join(item['text'] for item in transcript_data)
+        
+        # Detect the language
+        detected_language = detect_language(full_text[:100])  # Use the first 100 characters for detection
+        
+        # Translate to English if not already in English
+        if detected_language != 'en':
+            translated_text = translate_to_english(full_text)
+            return {
+                'original_transcription': full_text,
+                'detected_language': detected_language,
+                'english_translation': translated_text
+            }
+        else:
+            return {
+                'transcription': full_text,
+                'detected_language': 'en'
+            }
+    
     except Exception as e:
-        logging.error(f"An error occurred while fetching captions: {e}")
-    
-    # If no captions are available or there was an error, use the current logic
-    logging.info(f"Processing audio from {youtube_url}")
-    mp3_file = download_youtube_audio(youtube_url)
-    
-    logging.info(f"Transcribing audio from {mp3_file}")
-    return transcribe_audio(mp3_file)
+        logging.error(f"Error in transcribe_youtube: {str(e)}")
+        return {'error': str(e)}
 
 # Add this function to convert SRT to plain text
 def convert_srt_to_text(srt_content):
@@ -549,15 +556,6 @@ def convert_srt_to_text(srt_content):
         if not line.strip().isdigit() and not '-->' in line and line.strip():
             text_lines.append(line.strip())
     return ' '.join(text_lines)
-
-
-
-
-
-
-
-
-
 
 if __name__ == "__main__":
     # Ensure the temp_audio directory exists
