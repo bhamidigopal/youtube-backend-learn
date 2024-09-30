@@ -16,6 +16,14 @@ import time
 from dotenv import load_dotenv
 from anthropic import Anthropic
 import anthropic
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+
+
+from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api.formatters import JSONFormatter
+import json
 
 app = Flask(__name__)
 CORS(app)
@@ -232,22 +240,72 @@ def summarize_youtube():
         return jsonify({"error": "No URL provided"}), 400
     
     try:
-        logging.info(f"Processing audio from {youtube_url}")
-        mp3_file = download_youtube_audio(youtube_url)
+        logging.info(f"Transcribing YouTube video from {youtube_url}")
+        transcription_result = transcribe_youtube(youtube_url)
         
-        logging.info(f"Transcribing audio from {mp3_file}")
-        transcription = transcribe_audio(mp3_file)
+        # Use the English translation if available, otherwise use the original transcription
+        text_to_summarize = transcription_result.get("english_translation") or transcription_result.get("transcription")
         
         logging.info("Summarizing transcription")
-        summary = summarize(transcription)
+        summary = summarize(text_to_summarize)
         
         return jsonify({
-            "transcription": transcription,
+            "transcription_result": transcription_result,
             "summary": summary
         })
     except Exception as e:
         logging.error(f"Error processing request: {str(e)}")
         return jsonify({"error": str(e)}), 500
+    
+
+
+
+def process_transcript(url):
+    try:
+        video_id = extract_youtube_video_id(url)
+        logging.info(f"Processing transcript for video ID: {video_id}")
+        transcript = YouTubeTranscriptApi.get_transcript(video_id)
+
+
+
+
+        '''
+        # Detect the language of the transcription
+        detected_language = detect_language(transcription)
+        
+        if detected_language != 'en':
+            logging.info(f"Detected non-English language: {detected_language}. Translating to English.")
+            translated_transcription = translate_to_english(transcription)
+            return {
+                "original_transcription": transcription,
+                "detected_language": detected_language,
+                "english_translation": translated_transcription
+            }
+        else:
+            return {
+                "transcription": transcription,
+                "detected_language": "en"
+            }
+   
+        
+        '''
+        
+        # Format the transcript to JSON
+        formatter = JSONFormatter()
+        json_formatted = formatter.format_transcript(transcript)
+        
+        # Parse the JSON string
+        transcript_data = json.loads(json_formatted)
+        
+        # Extract all 'text' fields and concatenate them
+        full_text = ' '.join(item['text'] for item in transcript_data)
+        
+        # Return a dictionary instead of a jsonify response
+        return {'transcription': full_text}
+    
+    except Exception as e:
+        logging.error(f"Error in process_transcript: {str(e)}")
+        return {'error': str(e)}
 
 @app.route('/infographic-youtube', methods=['POST'])
 @require_auth
@@ -259,14 +317,14 @@ def infographic_youtube():
         return jsonify({"error": "No URL provided"}), 400
     
     try:
-        logging.info(f"Processing audio from {youtube_url}")
-        mp3_file = download_youtube_audio(youtube_url)
+        logging.info(f"Transcribing YouTube video from {youtube_url}")
+        transcription_result = transcribe_youtube(youtube_url)
         
-        logging.info(f"Transcribing audio from {mp3_file}")
-        transcription = transcribe_audio(mp3_file)
+        # Use the English translation if available, otherwise use the original transcription
+        text_to_summarize = transcription_result.get("english_translation") or transcription_result.get("transcription")
         
         logging.info("Summarizing transcription")
-        summary = summarize(transcription)
+        summary = summarize(text_to_summarize)
         
         logging.info(f"Generating infographic with {len(summary)} summary points")
         image_data = generate_infographic(summary)
@@ -324,7 +382,7 @@ def download_mp3():
 
 @app.route('/transcribe-youtube', methods=['POST'])
 @require_auth
-def transcribe_youtube():
+def transcribe_youtube_api():
     data = request.json
     youtube_url = data.get('url')
     
@@ -332,11 +390,8 @@ def transcribe_youtube():
         return jsonify({"error": "No URL provided"}), 400
     
     try:
-        logging.info(f"Processing audio from {youtube_url}")
-        mp3_file = download_youtube_audio(youtube_url)
-        
-        logging.info(f"Transcribing audio from {mp3_file}")
-        transcription_result = transcribe_audio(mp3_file)
+        logging.info(f"Transcribing YouTube video from {youtube_url}")
+        transcription_result = transcribe_youtube(youtube_url)
         
         return jsonify(transcription_result)
     except Exception as e:
@@ -462,6 +517,47 @@ def test_time():
         "file_mtime": file_mtime,
         "difference": current_time - file_mtime
     })
+
+def transcribe_youtube(youtube_url):
+    try:
+        # Check for available captions using YouTube Data API
+        transcript_result = process_transcript(youtube_url)
+        
+        if 'error' in transcript_result:
+            raise Exception(transcript_result['error'])
+        
+        return {
+            "transcription": transcript_result['transcription'],
+            "detected_language": "en"  # Assuming the transcript is in English
+        }
+
+    except Exception as e:
+        logging.error(f"An error occurred while fetching captions: {e}")
+    
+    # If no captions are available or there was an error, use the current logic
+    logging.info(f"Processing audio from {youtube_url}")
+    mp3_file = download_youtube_audio(youtube_url)
+    
+    logging.info(f"Transcribing audio from {mp3_file}")
+    return transcribe_audio(mp3_file)
+
+# Add this function to convert SRT to plain text
+def convert_srt_to_text(srt_content):
+    lines = srt_content.split('\n')
+    text_lines = []
+    for line in lines:
+        if not line.strip().isdigit() and not '-->' in line and line.strip():
+            text_lines.append(line.strip())
+    return ' '.join(text_lines)
+
+
+
+
+
+
+
+
+
 
 if __name__ == "__main__":
     # Ensure the temp_audio directory exists
