@@ -148,17 +148,23 @@ def detect_language(text):
 
 def translate_to_english(text):
     try:
-        response = openai_client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are a highly skilled translator. Translate the following text to English, maintaining the original meaning and tone as closely as possible."},
-                {"role": "user", "content": f"Translate this to English:\n\n{text}"}
-            ],
-            max_tokens=1500
-        )
-        return response.choices[0].message.content.strip()
+        # Split the text into chunks of approximately 1000 characters
+        chunks = [text[i:i+1000] for i in range(0, len(text), 1000)]
+        translated_chunks = []
+
+        for chunk in chunks:
+            response = openai_client.chat.completions.create(
+                model="gpt-3.5-turbo",  # Using a smaller model for translation
+                messages=[
+                    {"role": "system", "content": "You are a translator. Translate the following text to English, maintaining the original meaning and tone as closely as possible."},
+                    {"role": "user", "content": f"Translate this to English:\n\n{chunk}"}
+                ],
+                max_tokens=1500
+            )
+            translated_chunks.append(response.choices[0].message.content.strip())
+
+        return ' '.join(translated_chunks)
     except Exception as e:
-        logging.error(f"Error downloading audio: {str(e)}")
         logging.error(f"Error translating text: {str(e)}")
         raise
 
@@ -527,20 +533,23 @@ def transcribe_youtube(youtube_url):
         # Extract all 'text' fields and concatenate them
         full_text = ' '.join(item['text'] for item in transcript_data)
         
+        # Truncate the full text to a maximum of 4000 characters
+        truncated_text = full_text[:4000]
+        
         # Detect the language
-        detected_language = detect_language(full_text[:100])  # Use the first 100 characters for detection
+        detected_language = detect_language(truncated_text[:100])  # Use the first 100 characters for detection
         
         # Translate to English if not already in English
         if detected_language != 'en':
-            translated_text = translate_to_english(full_text)
+            translated_text = translate_to_english(truncated_text)
             return {
-                'original_transcription': full_text,
+                'original_transcription': truncated_text,
                 'detected_language': detected_language,
                 'english_translation': translated_text
             }
         else:
             return {
-                'transcription': full_text,
+                'transcription': truncated_text,
                 'detected_language': 'en'
             }
     
